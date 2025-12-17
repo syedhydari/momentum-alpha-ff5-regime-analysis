@@ -2,7 +2,7 @@
 
 **Author:** Syed Bashir Hydari, Pablo Rocha Gomez, Isabella Zhu
 
-**Date:** December 16, 2025
+**Date:** | December 16, 2025
 
 ## Project Overview
 
