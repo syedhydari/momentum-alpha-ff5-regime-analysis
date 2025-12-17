@@ -66,7 +66,7 @@ This project was completed for [Course Name/Code] at [Institution], Fall 2024. T
 ## Citation
 
 If you reference or build upon this work, please cite as:
-Hydari, S. B., Rocha Gomez, P., & Zhu, I. (2025). Do Momentum Portfolio Returns Exhibit Abnormal Performance After Controlling for Fama-French Five Factors? A Regime-Dependent Analysis of Factor-Adjusted Returns. GitHub repository: https://github.com/syedhydari/momentum-alpha-ff5-regime-analysis
+Hydari, S. B., Rocha Gomez, P., & Zhu, I. (2025). Do Momentum Portfolio Returns Exhibit Abnormal Performance After Controlling for Fama-French Five Factors? A Regime-Dependent Analysis of Factor-Adjusted Returns. GitHub repo: https://github.com/syedhydari/momentum-alpha-ff5-regime-analysis
 
 ## License
 
