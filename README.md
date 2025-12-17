@@ -76,7 +76,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Syed Bashir Hydari - [GitHub: @syedhydari]
 - For questions about methodology or results, please open an issue
-
----
-
-**Academic Integrity Notice:** This project represents original work completed for academic purposes. If you use this code or methodology for your own academic work, proper citation is required per your institution's academic integrity policies. 
