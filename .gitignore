@@ -1,0 +1,30 @@
+# R
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# Quarto
+/.quarto/
+_site/
+_book/
+
+# Output files (keep only committed versions)
+*.html
+*.docx
+# Keep the PDF
+# Final-Report.pdf
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Data cache (if any)
+data/
+cache/
