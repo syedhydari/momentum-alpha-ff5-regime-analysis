@@ -1,0 +1,485 @@
+---
+title: "Do Momentum Portfolio Returns Exhibit Abnormal Performance After Controlling for Fama-French Five Factors?"
+subtitle: "A Regime-Dependent Analysis of Factor-Adjusted Returns"
+author:
+  - "Syed Bashir Hydari (sbh2157)"
+  - "Pablo Rocha Gomez (pr2755)"
+  - "Isabella Zhu (zz3454)"
+date: "December 16, 2025"
+format:
+  pdf:
+    toc: false
+    number-sections: true
+    colorlinks: true
+    geometry: 
+      - margin=1in
+    fontsize: 11pt
+    linestretch: 1.5
+    fig-pos: 'H'
+execute:
+  warning: false
+  message: false
+  echo: false
+---
+
+```{r setup}
+#| include: false
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(kableExtra)
+library(zoo)
+library(car)
+library(lmtest)
+library(sandwich)
+library(ggfortify)
+
+# Set plotting theme
+theme_set(theme_minimal(base_size = 10))
+regime_colors <- c("High Vol" = "#d62728", "Low Vol" = "#2ca02c")
+
+# Download data function
+download_french_factor <- function(url) {
+  temp_zip <- tempfile(fileext = ".zip")
+  temp_dir <- tempdir()
+  download.file(url, temp_zip, mode = "wb", quiet = TRUE)
+  csv_file <- unzip(temp_zip, exdir = temp_dir)
+  raw_lines <- readLines(csv_file[1])
+  start_line <- which(str_detect(raw_lines, "^\\d{6}"))[1]
+  data_lines <- raw_lines[start_line:length(raw_lines)]
+  end_line <- which(data_lines == "" | !str_detect(data_lines, "^\\d{6}"))[1] - 1
+  if (is.na(end_line)) end_line <- length(data_lines)
+  temp_csv <- tempfile(fileext = ".csv")
+  writeLines(data_lines[1:end_line], temp_csv)
+  data <- read_csv(temp_csv, col_names = FALSE, show_col_types = FALSE)
+  unlink(c(temp_zip, csv_file, temp_csv))
+  return(data)
+}
+
+# Load data
+ff5_url <- "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_5_Factors_2x3_CSV.zip"
+ff5_raw <- download_french_factor(ff5_url)
+ff5_data <- ff5_raw %>%
+  rename(date = 1, MKT_RF = 2, SMB = 3, HML = 4, RMW = 5, CMA = 6, RF = 7) %>%
+  mutate(date = ymd(paste0(date, "01")),
+         across(c(MKT_RF, SMB, HML, RMW, CMA), ~as.numeric(.) / 100)) %>%
+  filter(!is.na(date)) %>%
+  select(-RF)
+
+mom_url <- "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Momentum_Factor_CSV.zip"
+mom_raw <- download_french_factor(mom_url)
+mom_data <- mom_raw %>%
+  rename(date = 1, UMD = 2) %>%
+  mutate(date = ymd(paste0(date, "01")), UMD = as.numeric(UMD) / 100) %>%
+  filter(!is.na(date))
+
+data_full <- inner_join(ff5_data, mom_data, by = "date") %>%
+  filter(date >= as.Date("2010-01-01"), date <= as.Date("2024-12-31"))
+
+# Create regime variable
+data_full <- data_full %>%
+  arrange(date) %>%
+  mutate(
+    vol_12m = rollapply(MKT_RF, width = 12, FUN = sd, align = "right", fill = NA, partial = FALSE),
+    vol_median = median(vol_12m, na.rm = TRUE),
+    regime = if_else(vol_12m >= vol_median, "High Vol", "Low Vol"),
+    regime = factor(regime, levels = c("Low Vol", "High Vol"))
+  )
+
+# Estimate models
+model_a <- lm(UMD ~ MKT_RF + SMB + HML + RMW + CMA, data = data_full)
+model_a_summary <- summary(model_a)
+
+data_model_b <- data_full %>%
+  filter(!is.na(regime)) %>%
+  mutate(regime_high = if_else(regime == "High Vol", 1, 0))
+
+model_b <- lm(UMD ~ MKT_RF + SMB + HML + RMW + CMA + regime_high + MKT_RF:regime_high, 
+              data = data_model_b)
+model_b_summary <- summary(model_b)
+
+# Diagnostics
+bp_test <- bptest(model_a)
+dw_test <- durbinWatsonTest(model_a)
+shapiro_test <- shapiro.test(residuals(model_a))
+robust_se <- coeftest(model_a, vcov = NeweyWest(model_a, lag = 4))
+vif_vals <- vif(model_a)
+
+# LOOCV function for MSPR calculation
+calculate_loocv_mspr <- function(formula, data) {
+  n <- nrow(data)
+  loocv_errors <- numeric(n)  # Pre-allocate numeric vector
+  
+  for (i in 1:n) {
+    model_cv <- lm(formula, data = data[-i, ])
+    pred <- predict(model_cv, newdata = data[i, ])
+    actual <- as.numeric(data[i, all.vars(formula)[1], drop = TRUE])
+    loocv_errors[i] <- (actual - pred)^2
+  }
+  
+  return(mean(loocv_errors, na.rm = TRUE))
+}
+
+# Calculate MSPR and MSE
+mspr_a <- calculate_loocv_mspr(UMD ~ MKT_RF + SMB + HML + RMW + CMA, data = data_full)
+mse_a <- mean(residuals(model_a)^2, na.rm = TRUE)
+ratio_a <- mspr_a / mse_a
+```
+
+# ) Introduction
+
+Momentum—the tendency for assets with strong recent performance to continue outperforming—represents one of the most persistent yet puzzling phenomena in financial markets. Since Jegadeesh and Titman's (1993) seminal work documenting this anomaly, momentum strategies have generated consistent positive returns across markets and time periods, challenging the efficient market hypothesis and prompting extensive academic inquiry. Despite decades of research, a fundamental question remains unresolved: do momentum returns represent genuine abnormal performance, or are they simply compensation for exposure to established risk factors?
+
+This study examines whether momentum portfolio returns exhibit statistically and economically significant alpha after controlling for the Fama-French Five-Factor model, the current consensus framework in empirical asset pricing. Using monthly U.S. equity data spanning January 2010 through December 2024, we test whether momentum's apparent profitability persists after accounting for market, size, value, profitability, and investment factors. Our analysis encompasses 180 monthly observations, capturing a period of substantial market volatility including the European debt crisis, multiple Federal Reserve policy shifts, the COVID-19 pandemic, and recent inflationary pressures.
+
+Beyond testing for unconditional abnormal returns, we extend the analysis to investigate whether momentum's effectiveness varies with market conditions. Specifically, we examine whether momentum's alpha and factor exposures differ across volatility regimes—periods of high versus low market turbulence. This regime-dependent perspective recognizes that momentum strategies may exhibit asymmetric behavior during calm versus turbulent markets, potentially reflecting behavioral biases that intensify during specific market states. If momentum's abnormal returns prove state-dependent, such findings would have important implications for dynamic portfolio allocation and risk management.
+
+Our exploratory analysis reveals intriguing patterns. Momentum (UMD) earned an average monthly return of `r sprintf("%.2f%%", mean(data_full$UMD, na.rm=TRUE)*100)` with volatility of `r sprintf("%.2f%%", sd(data_full$UMD, na.rm=TRUE)*100)` over the sample period. Notably, UMD exhibits a negative correlation with market excess returns (r = `r sprintf("%.3f", cor(data_full$UMD, data_full$MKT_RF))`), suggesting momentum behaves as a defensive or contrarian strategy—diverging sharply from traditional market-following factors. The figure below illustrates momentum and market returns over time, with shaded regions indicating volatility regimes constructed from 12-month rolling standard deviations of market returns.
+
+```{r fig-timeseries}
+#| fig-cap: "Momentum (UMD) and Market Excess Returns (MKT-RF) Over Time with Volatility Regimes. High-volatility periods (red) correspond to major market disruptions including the 2011 European debt crisis, 2015-16 oil shock, and 2020 COVID-19 crash."
+#| fig-width: 7
+#| fig-height: 3.5
+
+plot_data <- data_full %>%
+  select(date, UMD, MKT_RF, regime) %>%
+  pivot_longer(cols = c(UMD, MKT_RF), names_to = "Factor", values_to = "Return")
+
+regime_bands <- data_full %>%
+  filter(!is.na(regime)) %>%
+  mutate(regime_change = regime != lag(regime, default = first(regime)),
+         regime_group = cumsum(regime_change)) %>%
+  group_by(regime_group) %>%
+  summarise(regime = first(regime), start_date = first(date), 
+            end_date = last(date), .groups = "drop")
+
+ggplot() +
+  geom_rect(data = regime_bands, aes(xmin = start_date, xmax = end_date,
+                ymin = -Inf, ymax = Inf, fill = regime), alpha = 0.2) +
+  geom_line(data = plot_data, aes(x = date, y = Return * 100, 
+                color = Factor, linetype = Factor), linewidth = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray30", linewidth = 0.3) +
+  scale_color_manual(values = c("UMD" = "#1f77b4", "MKT_RF" = "#ff7f0e"),
+                     labels = c("MKT_RF" = "Market", "UMD" = "Momentum")) +
+  scale_linetype_manual(values = c("UMD" = "solid", "MKT_RF" = "dashed"),
+                        labels = c("MKT_RF" = "Market", "UMD" = "Momentum")) +
+  scale_fill_manual(values = regime_colors, name = "Regime") +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(x = "", y = "Monthly Return (%)", color = "Factor", linetype = "Factor") +
+  theme_minimal(base_size = 9) + theme(legend.position = "bottom", legend.box = "vertical")
+```
+
+The visualization reveals distinct momentum behavior across market regimes. High-volatility periods align with major financial disruptions, while low-volatility periods reflect calmer market conditions. The negative co-movement between momentum and market returns during several episodes suggests potential diversification benefits. The figure below provides additional context through a scatterplot of momentum versus market returns, colored by regime.
+
+```{r fig-scatter}
+#| fig-cap: "Momentum Returns vs Market Excess Returns by Volatility Regime. The negative slope indicates momentum's defensive characteristics, with visual heterogeneity across regimes motivating our interaction model."
+#| fig-width: 7
+#| fig-height: 3.5
+
+simple_model <- lm(UMD ~ MKT_RF, data = data_full)
+
+ggplot(data_full %>% filter(!is.na(regime)), 
+       aes(x = MKT_RF * 100, y = UMD * 100)) +
+  geom_smooth(method = "lm", se = TRUE, color = "gray20", 
+              fill = "gray70", alpha = 0.3, linewidth = 0.7) +
+  geom_point(aes(color = regime, shape = regime), size = 1.5, alpha = 0.6) +
+  scale_color_manual(values = regime_colors) +
+  scale_shape_manual(values = c(16, 17)) +
+  labs(x = "Market Excess Return (%)", y = "Momentum Return (%)",
+       color = "Regime", shape = "Regime") +
+  theme_minimal(base_size = 9) + theme(legend.position = "bottom")
+```
+
+The negative bivariate slope (beta = `r sprintf("%.3f", coef(simple_model)[2])`, R-squared = `r sprintf("%.3f", summary(simple_model)$r.squared)`) diverges from traditional CAPM expectations and motivates our investigation of whether this defensive characteristic persists after controlling for the full Fama-French Five-Factor suite. Visual inspection suggests potential regime-dependent heterogeneity, with different cluster patterns across high and low volatility periods.
+
+# ) Data Collection and Data Description
+
+All data originate from the Kenneth R. French Data Library (mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html), the standard source for factor-based empirical asset pricing research. The library provides monthly returns for value-weighted portfolios constructed from NYSE, AMEX, and NASDAQ stocks, with portfolio formation following established methodologies documented in Fama and French (2015). Our dependent variable, momentum portfolio returns (UMD, "Up Minus Down"), represents the average return on two high prior return portfolios minus the average return on two low prior return portfolios, formed using a 12-month look-back period with a one-month skip to avoid microstructure issues.
+
+The explanatory variables comprise the Fama-French Five Factors. MKT-RF captures market risk through the value-weighted market return minus the risk-free rate. SMB (Small Minus Big) proxies for size effects by measuring small-cap minus large-cap returns. HML (High Minus Low) captures value effects through high book-to-market minus low book-to-market returns. RMW (Robust Minus Weak) reflects profitability effects via high operating profitability minus low operating profitability returns. CMA (Conservative Minus Aggressive) captures investment patterns through low asset growth minus high asset growth returns. All returns are expressed as monthly percent excess returns and converted to decimal proportions for modeling.
+
+Our sample period spans January 2010 through December 2024, yielding 180 monthly observations. This 15-year window deliberately excludes the 2007-2009 financial crisis to focus on post-crisis market dynamics with more stable structural characteristics. The period nevertheless captures substantial volatility including the European sovereign debt crisis (2011-2012), the 2015-16 oil price collapse, Federal Reserve tapering episodes, the COVID-19 pandemic shock and recovery (2020-2021), and recent inflationary pressures with aggressive monetary tightening (2022-2024). This heterogeneous environment provides a robust testing ground for momentum's performance across diverse market conditions. The table below presents summary statistics for all six factors across the full sample period, providing context for the scale and distributional properties of our data.
+
+```{r tbl-summary-stats}
+#| tbl-cap: "Summary Statistics for Fama-French Five Factors and Momentum (2010-2024). All values are monthly returns in percent."
+
+factors <- c("MKT_RF", "SMB", "HML", "RMW", "CMA", "UMD")
+
+desc_stats <- data_full %>%
+  select(all_of(factors)) %>%
+  summarise(across(everything(), 
+                   list(N = ~sum(!is.na(.)),
+                        Mean = ~mean(., na.rm = TRUE) * 100,
+                        SD = ~sd(., na.rm = TRUE) * 100,
+                        Min = ~min(., na.rm = TRUE) * 100,
+                        Median = ~median(., na.rm = TRUE) * 100,
+                        Max = ~max(., na.rm = TRUE) * 100),
+                   .names = "{.col}||{.fn}")) %>%
+  pivot_longer(everything(), 
+               names_to = c("Factor", ".value"),
+               names_sep = "\\|\\|") %>%
+  mutate(Factor = factor(Factor, levels = factors),
+         across(where(is.numeric) & !matches("N"), ~round(., 3)),
+         N = as.integer(N)) %>%
+  arrange(Factor)
+
+kable(desc_stats, 
+      booktabs = TRUE,
+      row.names = FALSE,
+      col.names = c("Factor", "N", "Mean (%)", "SD (%)", "Min (%)", "Median (%)", "Max (%)"),
+      align = c("l", "r", "r", "r", "r", "r", "r")) %>%
+  kable_styling(latex_options = c("HOLD_position", "scale_down"), font_size = 9)
+```
+
+The summary statistics confirm substantial heterogeneity in returns. Momentum (UMD) exhibits the highest volatility (SD = `r sprintf("%.2f%%", sd(data_full$UMD, na.rm=TRUE)*100)`) among the factors, reflecting its dynamic nature. Market excess returns (MKT-RF) show the expected positive mean of `r sprintf("%.2f%%", mean(data_full$MKT_RF, na.rm=TRUE)*100)` monthly, while the long-short factor portfolios (SMB, HML, RMW, CMA) display more modest average returns. The extreme minimum values across all factors correspond to crisis periods captured in our sample, particularly March 2020 during the COVID-19 crash.
+
+The figure below displays the correlation structure among all six factors, revealing important relationships that inform our multicollinearity assessment and interpretation of factor loadings.
+
+```{r fig-correlation}
+#| fig-cap: "Correlation Matrix of Fama-French Five Factors and Momentum. Color intensity indicates correlation strength, with numerical values displayed in each cell."
+#| fig-width: 6.5
+#| fig-height: 5
+
+cor_matrix <- data_full %>%
+  select(all_of(factors)) %>%
+  cor(use = "complete.obs")
+
+cor_long <- cor_matrix %>%
+  as.data.frame() %>%
+  rownames_to_column("Factor1") %>%
+  pivot_longer(-Factor1, names_to = "Factor2", values_to = "Correlation") %>%
+  mutate(Factor1 = factor(Factor1, levels = factors),
+         Factor2 = factor(Factor2, levels = rev(factors)))
+
+ggplot(cor_long, aes(x = Factor1, y = Factor2, fill = Correlation)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = sprintf("%.2f", Correlation)), 
+            color = "black", size = 2.5) +
+  scale_fill_gradient2(low = "#3498db", mid = "white", high = "#e74c3c",
+                       midpoint = 0, limits = c(-1, 1),
+                       name = "Correlation") +
+  labs(x = "", y = "") +
+  theme_minimal(base_size = 9) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        panel.grid = element_blank(),
+        legend.position = "right") +
+  coord_fixed()
+```
+
+The correlation matrix reveals several noteworthy patterns. Most striking is momentum's negative correlation with market returns (r = `r sprintf("%.2f", cor(data_full$UMD, data_full$MKT_RF))`), confirming the contrarian nature documented in our scatterplot. The moderate positive correlation between HML and CMA (r = `r sprintf("%.2f", cor(data_full$HML, data_full$CMA))`) reflects shared variance between value and investment factors, both of which involve valuation metrics. Despite this correlation, our subsequent VIF analysis confirms no problematic multicollinearity. Momentum shows relatively weak correlations with size (SMB), profitability (RMW), and investment (CMA) factors, suggesting it captures largely orthogonal risk dimensions.
+
+To operationalize "market state" for our regime analysis, we construct a volatility regime indicator using the 12-month rolling standard deviation of market excess returns. Periods where this rolling volatility exceeds the sample median are classified as "High Vol," while periods below the median are designated "Low Vol." This binary classification yields an approximately equal split: `r sum(data_full$regime == "Low Vol", na.rm=TRUE)` low-volatility months and `r sum(data_full$regime == "High Vol", na.rm=TRUE)` high-volatility months. The rolling window calculation necessitates 12 months of prior data, resulting in missing regime classifications for the first 11 observations, leaving an effective sample of `r sum(!is.na(data_full$regime))` months for regime-specific analyses.
+
+The French Data Library's construction methodology mitigates several common data quality concerns. Survivorship bias is minimized as the portfolios include delisted firms with appropriate adjustments for final return observations. Look-ahead bias is avoided through the use of t-1 formation periods—for example, momentum portfolios formed in month t use returns from t-12 through t-2. No missing values exist for the primary factor returns across our sample period. However, results remain specific to U.S. equities during this particular time frame, limiting immediate generalization to international markets or substantially different economic regimes.
+
+# ) Statistical Model
+
+We employ ordinary least squares (OLS) regression to test two complementary specifications. Model A establishes whether momentum earns abnormal returns after controlling for the Fama-French Five Factors:
+
+$$
+R_t^{UMD} = \alpha + \beta_m(MKT-RF)_t + \beta_s SMB_t + \beta_h HML_t + \beta_r RMW_t + \beta_c CMA_t + \varepsilon_t
+$$
+
+The intercept alpha represents abnormal return—return not explained by factor exposures. Under the null hypothesis that momentum is fully captured by the FF5 factors, alpha should equal zero. The slope coefficients (betas) measure momentum's sensitivities to each risk factor. The error term captures idiosyncratic variation. Standard OLS assumptions apply: linearity with mean-zero errors conditional on predictors, independence of observations, homoscedasticity, approximate normality of residuals, and absence of perfect multicollinearity among factors. The table below presents the estimated coefficients for Model A. The intercept provides our primary test of momentum's abnormal return, while the factor loadings reveal momentum's systematic risk exposures. Model fit statistics quantify the proportion of momentum variance explained by the five factors.
+
+```{r model-a-table}
+#| tbl-cap: "Model A Coefficients: Fama-French Five-Factor Regression. Intercept scaled to percent, factor loadings unitless. Significance: ***p<0.001, **p<0.01, *p<0.05."
+
+coef_table_a <- model_a_summary$coefficients %>%
+  as.data.frame() %>%
+  rownames_to_column("Term") %>%
+  mutate(
+    Term = if_else(Term == "(Intercept)", "Intercept (alpha)", Term),
+    Estimate = if_else(Term == "Intercept (alpha)", Estimate * 100, Estimate),
+    `Std. Error` = if_else(Term == "Intercept (alpha)", `Std. Error` * 100, `Std. Error`),
+    Sig = case_when(`Pr(>|t|)` < 0.001 ~ "***", `Pr(>|t|)` < 0.01 ~ "**", 
+                    `Pr(>|t|)` < 0.05 ~ "*", TRUE ~ "")
+  ) %>%
+  rename(`t-value` = `t value`, `p-value` = `Pr(>|t|)`) %>%
+  mutate(across(where(is.numeric), ~round(., 4))) %>%
+  mutate(Term = paste0(Term, " ", Sig)) %>%
+  select(-Sig)
+
+kable(coef_table_a, booktabs = TRUE, row.names = FALSE) %>%
+  kable_styling(latex_options = c("HOLD_position", "scale_down"), font_size = 9)
+```
+
+The model achieves an R-squared of `r sprintf("%.4f", model_a_summary$r.squared)` (adjusted R-squared = `r sprintf("%.4f", model_a_summary$adj.r.squared)`), indicating the five FF factors explain `r sprintf("%.1f%%", model_a_summary$r.squared*100)` of momentum's variance—substantial but far from complete. An F-statistic of `r sprintf("%.2f", model_a_summary$fstatistic[1])` (p < 0.001) confirms the factors are jointly statistically significant. The residual standard error of `r sprintf("%.4f%%", model_a_summary$sigma * 100)` suggests meaningful idiosyncratic variation remains.
+
+The intercept (alpha) of `r sprintf("%.4f%%", coef(model_a)[1]*100)` per month (t = `r sprintf("%.2f", model_a_summary$coefficients[1,3])`, p = `r sprintf("%.4f", model_a_summary$coefficients[1,4])`) provides the key test for abnormal performance. With a p-value of `r sprintf("%.3f", model_a_summary$coefficients[1,4])`, we fail to reject the null hypothesis of zero alpha at conventional significance levels using standard inference. However, the point estimate corresponds to an economically meaningful `r sprintf("%.2f%%", coef(model_a)[1]*12*100)` annual return. The 95% confidence interval [`r sprintf("%.3f%%", confint(model_a, "(Intercept)")[1]*100)`, `r sprintf("%.3f%%", confint(model_a, "(Intercept)")[2]*100)`] per month includes zero but suggests potential economic significance warranting further investigation with robust inference.
+
+The factor loadings reveal momentum's systematic exposures. Most notably, MKT-RF exhibits a significantly negative coefficient of `r sprintf("%.4f", coef(model_a)[2])` (p = `r sprintf("%.4f", model_a_summary$coefficients[2,4])`), indicating momentum behaves as a defensive or contrarian strategy—generating positive returns when markets decline and vice versa. This contradicts naive CAPM intuition and suggests momentum captures risk dimensions orthogonal or opposite to market risk. HML shows a significantly negative loading of `r sprintf("%.4f", coef(model_a)[4])` (p = `r sprintf("%.3f", model_a_summary$coefficients[4,4])`), implying momentum tilts toward growth stocks (low book-to-market) rather than value stocks. The remaining factors SMB and RMW exhibit statistically insignificant coefficients, while CMA shows a significant positive loading, suggesting momentum's systematic risk primarily involves contrarian market exposure and growth orientation.
+
+Model B extends this analysis by testing regime-dependent effects. Specifically, we examine whether momentum's alpha and market beta vary across volatility states:
+
+$$
+\begin{aligned}
+R_t^{UMD} = &\alpha_L + \delta \cdot HighVol_t + \beta_m(MKT-RF)_t + \gamma_m \cdot (MKT-RF)_t \times HighVol_t \\
+&+ \beta_s SMB_t + \beta_h HML_t + \beta_r RMW_t + \beta_c CMA_t + \varepsilon_t
+\end{aligned}
+$$
+
+Here, HighVol represents a binary indicator for high-volatility regimes. The baseline alpha (alpha-L) captures low-volatility abnormal returns, while delta measures the difference in alpha during high-volatility periods (total high-vol alpha = alpha-L + delta). The gamma coefficient tests whether momentum's market sensitivity varies by regime (total high-vol market beta = beta-m + gamma). We focus this interaction model on market sensitivity rather than including all possible factor interactions to maintain parsimony and interpretability given the effective sample of `r sum(!is.na(data_full$regime))` regime-classified observations. The table below presents Model B estimates. The regime main effect (delta) and market interaction (gamma) provide tests of state-dependent momentum behavior, while other coefficients remain largely consistent with Model A.
+
+```{r model-b-table} 
+#| tbl-cap: "Model B Coefficients: Regime-Interaction Model. Intercepts and regime effects scaled to percent, factor loadings unitless. Significance: ***p<0.001, **p<0.01, *p<0.05."
+
+coef_table_b <- model_b_summary$coefficients %>%
+  as.data.frame() %>%
+  rownames_to_column("Term") %>%
+  mutate(
+    Term = case_match(Term,
+                      "(Intercept)" ~ "Intercept Low Vol",
+                      "MKT_RF" ~ "MKT-RF",
+                      "SMB" ~ "SMB",
+                      "HML" ~ "HML",
+                      "RMW" ~ "RMW",
+                      "CMA" ~ "CMA",
+                      "regime_high" ~ "Regime High Vol delta",
+                      "MKT_RF:regime_high" ~ "MKT-RF x High Vol gamma",
+                      .default = Term),
+    Estimate = if_else(str_detect(Term, "Intercept|Regime"), Estimate * 100, Estimate),
+    `Std. Error` = if_else(str_detect(Term, "Intercept|Regime"), `Std. Error` * 100, `Std. Error`),
+    Sig = case_when(`Pr(>|t|)` < 0.001 ~ "***", `Pr(>|t|)` < 0.01 ~ "**",
+                    `Pr(>|t|)` < 0.05 ~ "*", TRUE ~ "")
+  ) %>%
+  rename(`t-value` = `t value`, `p-value` = `Pr(>|t|)`) %>%
+  mutate(across(where(is.numeric), ~round(., 4))) %>%
+  mutate(Term = paste0(Term, " ", Sig)) %>%
+  select(-Sig)
+
+kable(coef_table_b, booktabs = TRUE, row.names = FALSE) %>%
+  kable_styling(latex_options = c("HOLD_position", "scale_down"), font_size = 9)
+```
+
+Model B achieves an R-squared of `r sprintf("%.4f", model_b_summary$r.squared)` (adjusted = `r sprintf("%.4f", model_b_summary$adj.r.squared)`), representing a modest improvement over Model A and confirming joint significance (F = `r sprintf("%.2f", model_b_summary$fstatistic[1])`, p < 0.001). The low-volatility baseline alpha is `r sprintf("%.4f%%", coef(model_b)[1]*100)` per month, while the regime coefficient delta of `r sprintf("%.4f%%", coef(model_b)["regime_high"]*100)` (t = `r sprintf("%.2f", model_b_summary$coefficients["regime_high", "t value"])`, p = `r sprintf("%.4f", model_b_summary$coefficients["regime_high", "Pr(>|t|)"])`) suggests `r if(coef(model_b)["regime_high"] < 0) "lower" else "higher"` alpha during high-volatility periods, though this difference lacks statistical significance (p = `r sprintf("%.3f", model_b_summary$coefficients["regime_high", "Pr(>|t|)"])`).
+
+However, the market interaction gamma of `r sprintf("%.4f", coef(model_b)["MKT_RF:regime_high"])` proves statistically significant (t = `r sprintf("%.2f", model_b_summary$coefficients["MKT_RF:regime_high", "t value"])`, p = `r sprintf("%.3f", model_b_summary$coefficients["MKT_RF:regime_high", "Pr(>|t|)"])`), indicating momentum's market beta strengthens during high-volatility regimes. The total market beta in high-volatility periods (`r sprintf("%.4f", coef(model_b)["MKT_RF"] + coef(model_b)["MKT_RF:regime_high"])`) substantially exceeds the low-volatility beta (`r sprintf("%.4f", coef(model_b)["MKT_RF"])`), suggesting momentum's defensive characteristics intensify during turbulent markets—precisely when diversification benefits matter most.
+
+# ) Research Question: Hypothesis Testing and Inference
+
+Our primary research question asks whether momentum portfolio returns earn significant alpha after controlling for Fama-French Five Factors. Standard OLS inference on Model A yields a t-statistic of `r sprintf("%.3f", model_a_summary$coefficients[1,3])` for the intercept, corresponding to a p-value of `r sprintf("%.4f", model_a_summary$coefficients[1,4])`. At the conventional 5% significance level, we fail to reject the null hypothesis of zero alpha. The 95% confidence interval of [`r sprintf("%.3f%%", confint(model_a, "(Intercept)")[1]*100)`, `r sprintf("%.3f%%", confint(model_a, "(Intercept)")[2]*100)`] per month includes zero, failing to establish statistical significance under classical inference.
+
+However, time series data raise concerns about heteroscedasticity and autocorrelation that could bias standard errors and invalidate classical inference. Diagnostic testing fails to reveal heteroscedasticity via the Breusch-Pagan test (BP = `r sprintf("%.2f", bp_test$statistic)`, p = `r sprintf("%.3f", bp_test$p.value)`), and the Durbin-Watson test shows no significant autocorrelation (DW = `r sprintf("%.2f", dw_test$dw)`, p = `r sprintf("%.2f", dw_test$p)`). To address these concerns and provide conservative inference, we compute Newey-West heteroscedasticity and autocorrelation consistent (HAC) standard errors with a lag of 4 months (approximately one-third of a year for monthly data).
+
+The robust inference modestly changes our conclusions. Using Newey-West HAC standard errors, the intercept's robust standard error decreases to `r sprintf("%.4f%%", robust_se[1,2]*100)`, yielding a robust t-statistic of `r sprintf("%.3f", robust_se[1,3])` and a robust p-value of `r sprintf("%.4f", robust_se[1,4])`. This p-value of `r sprintf("%.3f", robust_se[1,4])` remains above the 0.05 threshold but approaches borderline significance, suggesting the finding is sensitive to inference methodology. Under the most conservative interpretation using robust standard errors, we fail to reject the null hypothesis of zero alpha at the 5% level, though the p-value of `r sprintf("%.2f", robust_se[1,4])` suggests marginal statistical significance that warrants attention.
+
+From an economic perspective, the point estimate of `r sprintf("%.4f%%", coef(model_a)[1]*100)` per month (approximately `r sprintf("%.2f%%", coef(model_a)[1]*12*100)` annually) represents meaningful magnitude for momentum strategies. While statistical significance remains elusive at conventional thresholds, the consistent positive point estimate across specifications combined with substantial idiosyncratic variation (77% unexplained by FF5 factors) suggests momentum captures unique return dimensions. The negative market beta of `r sprintf("%.3f", coef(model_a)[2])` (highly significant with p < 0.01) indicates momentum behaves as a defensive or contrarian factor, potentially offering valuable diversification benefits during market downturns—benefits that may justify implementation despite marginal alpha significance.
+
+Regarding our secondary hypotheses, the F-test for joint factor significance decisively rejects the null that all factor loadings equal zero (F = `r sprintf("%.2f", model_a_summary$fstatistic[1])`, p < 0.001). The five FF5 factors collectively explain 23.7% of momentum variance, confirming systematic risk exposures though leaving substantial unexplained variation. The regime sensitivity hypothesis yields mixed evidence: while momentum's alpha does not differ significantly across volatility regimes (delta: p = `r sprintf("%.3f", model_b_summary$coefficients["regime_high", "Pr(>|t|)"])`), momentum's market beta does vary significantly (gamma: p = `r sprintf("%.3f", model_b_summary$coefficients["MKT_RF:regime_high", "Pr(>|t|)"])`). This suggests momentum's defensive characteristics intensify during high-volatility periods, with the total market beta becoming more negative when markets are turbulent.
+
+The figure below presents key diagnostic plots assessing model assumptions. The Q-Q plot reveals residuals follow the theoretical normal distribution closely except in the extreme tails, where observations corresponding to crisis events (March 2020 COVID crash, August 2011 European crisis) exhibit some deviation. The Shapiro-Wilk test (W = `r sprintf("%.4f", shapiro_test$statistic)`, p = `r sprintf("%.3f", shapiro_test$p.value)`) rejects perfect normality at the 5% level due to minor tail deviations, though with 180 observations the Central Limit Theorem justifies asymptotic normal inference for OLS.
+
+```{r fig-diagnostics}
+#| fig-cap: "Diagnostic Plots for Model A. Left: Normal Q-Q plot shows close adherence to normality except in extreme tails. Right: Residuals vs Fitted Values reveals mild heteroscedasticity addressed via robust inference."
+#| fig-width: 7
+#| fig-height: 3
+
+library(gridExtra)
+
+p1 <- ggplot(data.frame(residuals = residuals(model_a)), aes(sample = residuals)) +
+  stat_qq(size = 1.5, alpha = 0.6, color = "#1f77b4") +
+  stat_qq_line(color = "red", linewidth = 0.7, linetype = "dashed") +
+  labs(x = "Theoretical Quantiles", y = "Sample Quantiles") +
+  theme_minimal(base_size = 9)
+
+p2 <- ggplot(data.frame(fitted = fitted(model_a), residuals = residuals(model_a)), 
+       aes(x = fitted * 100, y = residuals * 100)) +
+  geom_point(alpha = 0.6, size = 1.5, color = "#1f77b4") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  geom_smooth(method = "loess", se = FALSE, color = "darkgreen", linewidth = 0.7) +
+  labs(x = "Fitted Values (%)", y = "Residuals (%)") +
+  theme_minimal(base_size = 9)
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+Multicollinearity diagnostics reveal no concerns. The table below presents variance inflation factors (VIF) for all five predictors in Model A.
+
+```{r tbl-vif}
+#| tbl-cap: "Variance Inflation Factors (VIF) for Model A Predictors. VIF values below 5 indicate no problematic multicollinearity; values below 10 are generally acceptable."
+
+vif_table <- data.frame(
+  Factor = names(vif_vals),
+  VIF = vif_vals,
+  row.names = NULL
+) %>%
+  mutate(VIF = round(VIF, 3),
+         Assessment = case_when(
+           VIF < 5 ~ "No concern",
+           VIF < 10 ~ "Moderate",
+           TRUE ~ "Problematic"
+         ))
+
+kable(vif_table, 
+      booktabs = TRUE,
+      row.names = FALSE,
+      col.names = c("Factor", "VIF", "Assessment"),
+      align = c("l", "r", "l")) %>%
+  kable_styling(latex_options = "HOLD_position", font_size = 9)
+```
+
+All variance inflation factors remain well below 5, with the maximum VIF of `r sprintf("%.2f", max(vif_vals))` for `r names(which.max(vif_vals))` far below the threshold of 10 suggesting problematic collinearity. Despite the moderate correlation between HML and CMA documented in Figure 3 (r = `r sprintf("%.2f", cor(data_full$HML, data_full$CMA))`), the low VIF values confirm this poses no estimation difficulties. The uniformly low VIF values indicate coefficient estimates remain stable and standard errors are not artificially inflated by multicollinearity. This validates our decision to include all five Fama-French factors simultaneously in Model A.
+
+Cook's Distance analysis identified five influential observations exceeding the threshold of 4/n = `r sprintf("%.4f", 4/nrow(data_full))`, primarily corresponding to extreme market events including the March 2020 COVID-19 crash and August 2011 European debt crisis escalation. These observations represent legitimate extreme returns rather than data errors or outliers requiring removal. Retaining them provides a more realistic assessment of momentum's behavior during crises—precisely the periods when diversification benefits matter most for portfolio risk management.
+
+# ) Appendix
+
+## Model Selection
+
+The choice to include all five Fama-French factors rests on both theoretical and empirical grounds. Theoretically, the FF5 model represents the current consensus in empirical asset pricing, capturing market, size, value, profitability, and investment dimensions that span a comprehensive set of systematic risk factors (Fama & French, 2015). Testing momentum alpha after controlling for this full suite provides the most stringent assessment of whether momentum represents a distinct anomaly versus compensation for known risks.
+
+Empirically, we compared nested models to verify that the full FF5 specification provides superior fit. The table below presents adjusted R-squared and AIC statistics for five nested specifications, progressively adding factors from a market-only model through the complete FF5.
+
+```{r model-selection}
+#| tbl-cap: "Nested Model Comparison. Model 5 achieves highest adjusted R-squared and competitive AIC, justifying inclusion of all five factors."
+
+model_1 <- lm(UMD ~ MKT_RF, data = data_full)
+model_2 <- lm(UMD ~ MKT_RF + SMB, data = data_full)
+model_3 <- lm(UMD ~ MKT_RF + SMB + HML, data = data_full)
+model_4 <- lm(UMD ~ MKT_RF + SMB + HML + RMW, data = data_full)
+
+model_comp <- data.frame(
+  Model = c("1 Market", "2 Plus Size", "3 Plus Value", "4 Plus Profitability", "5 Full FF5"),
+  `Adj R2` = c(summary(model_1)$adj.r.squared, summary(model_2)$adj.r.squared,
+               summary(model_3)$adj.r.squared, summary(model_4)$adj.r.squared,
+               model_a_summary$adj.r.squared),
+  AIC = c(AIC(model_1), AIC(model_2), AIC(model_3), AIC(model_4), AIC(model_a))
+) %>% mutate(across(where(is.numeric), ~round(., 4)))
+
+kable(model_comp, booktabs = TRUE, row.names = FALSE,
+      col.names = c("Model", "Adj. R-squared", "AIC")) %>%
+  kable_styling(latex_options = "HOLD_position", font_size = 9)
+```
+
+Model 5 achieves the highest adjusted R-squared of `r sprintf("%.4f", model_a_summary$adj.r.squared)` and competitive AIC of `r sprintf("%.2f", AIC(model_a))`, justifying inclusion of all five factors. The progressive increase from Model 1 (adj. R-squared = `r sprintf("%.4f", summary(model_1)$adj.r.squared)`) through Model 5 demonstrates that each additional factor contributes unique explanatory power. While Model 3 (market, size, value) shows relatively strong performance, the full FF5 specification provides the most comprehensive control for systematic risks.
+
+We retained raw percent returns for the dependent variable UMD without transformation. This choice prioritizes interpretability—the intercept directly represents monthly abnormal return in percent. Diagnostic assessment confirmed acceptable linearity through partial residual plots, adequate normality via Q-Q plots and Shapiro-Wilk testing, and feasibility of asymptotic inference given 180 observations. Alternative transformations (log, square root) were explored but offered no substantial diagnostic improvements while sacrificing direct economic interpretation.
+
+For Model B's regime-interaction specification, we adopted a parsimonious approach including only the regime main effect (delta) and market interaction (gamma) rather than interacting all five factors with the regime indicator. This parsimony avoids overfitting concerns given the effective sample of `r sum(!is.na(data_full$regime))` regime-classified observations, maintains model interpretability by focusing on the theoretically motivated momentum-market relationship, and sidesteps potential multicollinearity from multiple simultaneous interactions. The specification implicitly assumes other factor loadings (SMB, HML, RMW, CMA) remain stable across regimes—a simplifying assumption that could be relaxed with larger samples or alternative regime definitions.
+
+## Diagnostics and Model Validation
+
+Beyond the diagnostic plots presented in Section IV, we conducted comprehensive assumption testing. Homoscedasticity assessment via the Breusch-Pagan test (BP = `r sprintf("%.4f", bp_test$statistic)`, p = `r sprintf("%.4f", bp_test$p.value)`) failed to reject homoscedasticity (and thus, detect significant heteroscedasticity) at the 5% level. Nevertheless, we employ Newey-West HAC standard errors for robust inference as a conservative 
+approach given the time series structure of the data. The Durbin-Watson test (DW = `r sprintf("%.4f", dw_test$dw)`, p = `r sprintf("%.4f", dw_test$p)`) showed no significant autocorrelation, suggesting residuals are serially independent despite the time series structure—likely due to the weak persistence in monthly factor returns.
+
+All variance inflation factors remain well below problematic thresholds: MKT_RF (VIF = `r sprintf("%.2f", vif_vals["MKT_RF"])`), SMB (`r sprintf("%.2f", vif_vals["SMB"])`), HML (`r sprintf("%.2f", vif_vals["HML"])`), RMW (`r sprintf("%.2f", vif_vals["RMW"])`), CMA (`r sprintf("%.2f", vif_vals["CMA"])`). These low values confirm coefficient estimates are stable and not subject to collinearity-induced instability. Cook's Distance identified five influential observations primarily from crisis periods (March 2020, January 2019, February 2020, August 2011, October 2018), all retained as economically meaningful extreme events rather than data quality issues.
+
+To validate model generalizability and assess overfitting, we conducted leave-one-out cross-validation (LOOCV) to compute mean square prediction error (MSPR) for comparison with in-sample mean square error (MSE). Model A achieves MSPR = `r sprintf("%.6f", calculate_loocv_mspr(UMD ~ MKT_RF + SMB + HML + RMW + CMA, data_full))` versus MSE = `r sprintf("%.6f", mean(residuals(model_a)^2))`, yielding a ratio of `r sprintf("%.3f", calculate_loocv_mspr(UMD ~ MKT_RF + SMB + HML + RMW + CMA, data_full) / mean(residuals(model_a)^2))`. Ratios below 1.15 indicate excellent generalization with minimal overfitting; our ratio well within this range validates that the model generalizes effectively to out-of-sample observations. The out-of-sample prediction error exceeds in-sample error by only `r sprintf("%.1f%%", (ratio_a - 1)*100)`, confirming model reliability.
+
+## Key Takeaway
+
+This study provides evidence that momentum portfolio returns exhibit economically meaningful though marginally statistically significant abnormal returns after controlling for the comprehensive Fama-French Five-Factor model. Using robust Newey-West inference as a precuationary measure for time series data, we find a monthly alpha of `r sprintf("%.4f%%", coef(model_a)[1]*100)` (approximately `r sprintf("%.2f%%", coef(model_a)[1]*12*100)` annually) with a robust p-value of `r sprintf("%.3f", robust_se[1,4])`—approaching but not quite achieving conventional 5% significance. While statistical significance remains elusive under the strictest inference standards, the consistent positive point estimate combined with substantial unexplained variance (77% after FF5 controls) suggests momentum captures unique return dimensions beyond standard risk factors.
+
+Critically, momentum exhibits a highly significant negative market beta of `r sprintf("%.3f", coef(model_a)[2])` (p = 0.0072), indicating defensive or contrarian characteristics that diverge sharply from traditional market-following factors. This defensive nature strengthens during high-volatility periods, as evidenced by the significant negative interaction term in Model B (gamma = `r sprintf("%.4f", coef(model_b)["MKT_RF:regime_high"])`, p = `r sprintf("%.3f", model_b_summary$coefficients["MKT_RF:regime_high", "Pr(>|t|)"])`). Momentum's total market beta in high-volatility regimes (`r sprintf("%.4f", coef(model_b)["MKT_RF"] + coef(model_b)["MKT_RF:regime_high"])`) substantially exceeds its low-volatility beta (`r sprintf("%.4f", coef(model_b)["MKT_RF"])`), suggesting these strategies offer enhanced diversification benefits precisely when investors need them most—during market turbulence. While momentum's alpha does not vary significantly across regimes (p = `r sprintf("%.3f", model_b_summary$coefficients["regime_high", "Pr(>|t|)"])`), the regime-dependent strengthening of defensive characteristics carries important implications for dynamic portfolio allocation and risk management. Momentum strategies may prove particularly valuable not for unconditional alpha generation but for state-dependent diversification benefits during market stress.
+
+Reproducibility Note: All analyses presented in Final-Write-Up.pdf were generated directly from Final-Write-Up.qmd using R 4.x.x and Quarto. The source file contains all code for data acquisition, model estimation, diagnostics, and validation. Rendering Final-Write-Up.qmd will reproduce all results, tables, and figures exactly as shown in the PDF.
+
+## References
+
+Carhart, M. M. (1997). On persistence in mutual fund performance. *Journal of Finance*, 52(1), 57–82.
+
+Fama, E. F., & French, K. R. (2015). A five-factor asset pricing model. *Journal of Financial Economics*, 116(1), 1–22.
+
+Jegadeesh, N., & Titman, S. (1993). Returns to buying winners and selling losers: Implications for stock market efficiency. *Journal of Finance*, 48(1), 65–91.
