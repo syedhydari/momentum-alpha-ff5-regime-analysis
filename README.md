@@ -1,6 +1,6 @@
 # Momentum Portfolio Alpha:  Fama-French Five-Factor Regime Analysis
 
-**Author:** Syed Bashir Hydari (sbh2157), Pablo Rocha Gomez (pr2755), Isabella Zhu (zz3454)  
+**Author:** Syed Bashir Hydari, Pablo Rocha Gomez, Isabella Zhu
 **Date:** December 16, 2025
 
 ## Project Overview
