@@ -3,7 +3,7 @@
 **Author:** Syed Bashir Hydari (sbh2157), Pablo Rocha Gomez (pr2755), Isabella Zhu (zz3454)  
 **Date:** December 16, 2025
 
-## 📊 Project Overview
+## Project Overview
 
 This project examines whether momentum portfolio returns exhibit statistically significant abnormal performance (alpha) after controlling for the Fama-French Five-Factor model. Using monthly U.S. equity data from 2010-2024, we test for both unconditional alpha and regime-dependent effects across market volatility states. 
 
@@ -17,7 +17,7 @@ This project examines whether momentum portfolio returns exhibit statistically s
 - Momentum's defensive properties **strengthen during high-volatility periods**
 - FF5 factors explain only 23.7% of momentum variance, suggesting unique return dimensions
 
-## 🔬 Methodology
+## Methodology
 
 - **Data Source:** Kenneth R. French Data Library
 - **Sample Period:** January 2010 - December 2024 (180 monthly observations)
@@ -27,12 +27,12 @@ This project examines whether momentum portfolio returns exhibit statistically s
 - **Statistical Methods:** OLS regression with Newey-West HAC robust standard errors
 - **Regime Definition:** 12-month rolling volatility median split
 
-## 📁 Repository Contents
+## Repository Contents
 
 - `Final-Code.rmd` - Complete R Markdown source code with data acquisition, analysis, and reporting
 - `Final-Report.pdf` - Compiled academic report with full results and interpretation
 
-## 🚀 Reproducibility
+## Reproducibility
 
 ### Requirements
 - R (version 4.0+)
@@ -48,7 +48,7 @@ This project examines whether momentum portfolio returns exhibit statistically s
 
 **Note:** All data is downloaded programmatically during rendering - no manual data files needed.
 
-## 📈 Key Visualizations
+## Key Visualizations
 
 The analysis includes:
 - Time series plots of momentum returns across volatility regimes
@@ -56,23 +56,23 @@ The analysis includes:
 - Diagnostic plots for model validation
 - Correlation heatmaps of factor relationships
 
-## 🎓 Academic Context
+## Academic Context
 
 This project was completed for [Course Name/Code] at [Institution], Fall 2024. The analysis follows established methodologies from:
 - Jegadeesh & Titman (1993) - Original momentum documentation
 - Fama & French (2015) - Five-factor asset pricing model
 - Carhart (1997) - Momentum factor construction
 
-## 📝 Citation
+## Citation
 
 If you reference or build upon this work, please cite as:
 Hydari, S. B., Rocha Gomez, P., & Zhu, I. (2025). Do Momentum Portfolio Returns Exhibit Abnormal Performance After Controlling for Fama-French Five Factors? A Regime-Dependent Analysis of Factor-Adjusted Returns. GitHub repository: https://github.com/syedhydari/momentum-alpha-ff5-regime-analysis
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🔗 Contact
+## Contact
 
 - Syed Bashir Hydari - [GitHub: @syedhydari](https://github.com/syedhydari)
 - For questions about methodology or results, please open an issue
