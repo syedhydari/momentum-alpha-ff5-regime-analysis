@@ -59,7 +59,7 @@ The analysis includes:
 
 ## Academic Context
 
-This project was completed for [Course Name/Code] at [Institution], Fall 2024. The analysis follows established methodologies from:
+This project was completed for Linear Regression Models at Columbia University in December 2025. The analysis follows established methodologies from:
 - Jegadeesh & Titman (1993) - Original momentum documentation
 - Fama & French (2015) - Five-factor asset pricing model
 - Carhart (1997) - Momentum factor construction
