@@ -2,9 +2,9 @@
 title: "Do Momentum Portfolio Returns Exhibit Abnormal Performance After Controlling for Fama-French Five Factors?"
 subtitle: "A Regime-Dependent Analysis of Factor-Adjusted Returns"
 author:
-  - "Syed Bashir Hydari (sbh2157)"
-  - "Pablo Rocha Gomez (pr2755)"
-  - "Isabella Zhu (zz3454)"
+  - "Syed Bashir Hydari"
+  - "Pablo Rocha Gomez"
+  - "Amaan Khan"
 date: "December 16, 2025"
 format:
   pdf:
