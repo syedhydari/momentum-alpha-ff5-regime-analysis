@@ -40,15 +40,6 @@ This project examines whether momentum portfolio returns exhibit statistically s
 - Quarto
 - Required R packages: `tidyverse`, `lubridate`, `knitr`, `kableExtra`, `zoo`, `car`, `lmtest`, `sandwich`, `ggfortify`
 
-### How to Reproduce
-1. Clone this repository
-2. Open `Final-Code.rmd` in RStudio
-3. Install required packages if needed: `install.packages(c("tidyverse", "lubridate", ...))`
-4. Render the document: Click "Render" or run `quarto render Final-Code.rmd`
-5. The analysis will automatically download data from the French Data Library and regenerate all results
-
-**Note:** All data is downloaded programmatically during rendering - no manual data files needed.
-
 ## Key Visualizations
 
 The analysis includes:
